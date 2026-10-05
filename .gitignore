@@ -4,3 +4,5 @@
 .clj-kondo/
 .nrepl-port
 docs/
+all.txt
+.rebel_readline_history
