@@ -1,6 +1,6 @@
 (ns thermal-plant.runtime
   (:require
-    [clojure.data.json :as json])
+   [clojure.data.json :as json])
   (:import
    [java.io BufferedReader BufferedWriter InputStreamReader OutputStreamWriter]
    [java.net Socket]
@@ -33,12 +33,12 @@
 
 (defn send-message! [connection message]
   (send-line! connection
-    (json/write-str message)))
+              (json/write-str message)))
 
 (defn read-message! [connection]
   (json/read-str
-    (read-line! connection)
-    :key-fn keyword))
+   (read-line! connection)
+   :key-fn keyword))
 
 (defn request! [connection message]
   (send-message! connection message)
@@ -46,7 +46,27 @@
 
 (defn hello! [connection]
   (request! connection
+            {:v 1
+             :msg_id "hello"
+             :op "hello"
+             :args {:scope nil}}))
+
+(defn open-session [host port]
+  (let [connection (connect host port)
+        hello-response (hello! connection)
+        result (:result hello-response)]
+    (assoc connection
+           :scope (:scope result)
+           :next-seq (:next_seq result))))
+
+(defn latest! [connection signal]
+  (request!
+    connection
     {:v 1
-      :msg_id "hello"
-      :op "hello"
-      :args {:scope nil}}))
+      :msg_id "latest"
+      :op "latest"
+      :args {:signal signal}}))
+
+(defn latest-value! [connection signal]
+  (get-in (latest! connection signal)
+          [:result :value]))
