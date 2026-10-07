@@ -59,3 +59,36 @@
             (.join))]
     {:websocket websocket
      :messages messages}))
+
+;;----------------------------------------------------------------------
+;; SEND / RECEIVE
+;; ---------------------------------------------------------------------
+
+(defn send!
+  "Send one Clojure map as a WebSocket text message."
+  [{:keys [websocket]} message]
+  (-> ^WebSocket websocket
+      (.sendText (json/write-str message) true)
+      (.join))
+  nil)
+
+(defn receive!
+  "Wait one WebSocket-message and convert it to Clojure map"
+  [{:keys [messages]}]
+  (let [message
+        (.take ^LinkedBlockingQueue messages)]
+    (if (instance? Throwable message)
+      (throw message)
+      (json/read-str message :key-fn keyword))))
+
+;;----------------------------------------------------------------------
+;; CLOSE
+;;----------------------------------------------------------------------
+
+(defn close!
+  "Close WebSocket"
+  [{:keys [websocket]}]
+  (-> ^WebSocket websocket
+      (.sendClose WebSocket/NORMAL_CLOSURE "bye")
+      (.join))
+  nil)

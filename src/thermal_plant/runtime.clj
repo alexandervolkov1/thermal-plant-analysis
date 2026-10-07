@@ -1,146 +1,170 @@
 (ns thermal-plant.runtime
   (:require
-   [clojure.data.json :as json]
-   [thermal-plant.ws :as ws])
-  (:import
-   [java.io BufferedReader BufferedWriter InputStreamReader OutputStreamWriter]
-   [java.net Socket]
-   [java.nio.charset StandardCharsets]))
+   [thermal-plant.transport.tcp :as tcp]
+   [thermal-plant.transport.websocket :as websocket]
+   [clojure.core :as c]))
 
-(defn connect [host port]
-  (let  [socket (Socket. host port)
-         reader (BufferedReader.
-                 (InputStreamReader.
-                  (.getInputStream socket)
-                  StandardCharsets/UTF_8))
-         writer (BufferedWriter.
-                 (OutputStreamWriter.
-                  (.getOutputStream socket)
-                  StandardCharsets/UTF_8))]
-    {:socket socket
-     :reader reader
-     :writer writer}))
+;;---------------------------------------------------------------------
+;; TRANSPORT DISPATCH
+;; --------------------------------------------------------------------
 
-(defn close!
-  [client]
-  (case (:transport client)
+(defn- open-transport!
+  "Open selected transport"
+  [{:keys [transport host port url origin]}]
+  (case transport
     :tcp
-    (.close ^Socket (:socket client))
+    (tcp/open! host port)
 
     :websocket
-    (ws/close! (:ws client))))
+    (websocket/open! url origin)
 
-(defn send-line! [{:keys [writer]} text]
-  (.write writer text)
-  (.newLine writer)
-  (.flush writer))
+    (throw
+     (ex-info "Unknown transport"
+              {:transport transport}))))
 
-(defn read-line! [{:keys [reader]}]
-  (.readLine reader))
+(defn- send!
+  "Send one message through client's transport."
+  [{:keys [transport connection]} message]
+  (case transport
+    :tcp
+    (tcp/send! connection message)
 
-(defn send-message! [connection message]
-  (send-line! connection
-              (json/write-str message)))
+    :websocket
+    (websocket/send! connection message)))
 
-(defn read-message! [connection]
-  (json/read-str
-   (read-line! connection)
-   :key-fn keyword))
+(defn- receive!
+  "Receive one message through client's transport."
+  [{:keys [transport connection]}]
+  (case transport
+    :tcp
+    (tcp/receive! connection)
 
-(defn request! [connection message]
-  (send-message! connection message)
-  (read-message! connection))
+    :websocket
+    (websocket/receive! connection)))
 
-(defn hello! [connection]
-  (request! connection
-            {:v 1
-             :msg_id "hello"
-             :op "hello"
-             :args {:scope nil}}))
+(defn close!
+  "Close client connection."
+  [{:keys [transport connection]}]
+  (case transport
+    :tcp
+    (tcp/close! connection)
 
-(defn open-session [host port]
-  (let [connection (connect host port)
-        hello-response (hello! connection)
-        result (:result hello-response)]
-    (assoc connection
-           :scope (:scope result)
-           :next-seq (:next_seq result))))
+    :websocket
+    (websocket/close! connection)))
 
-(defn latest! [connection signal]
-  (request!
-   connection
-   {:v 1
-    :msg_id "latest"
-    :op "latest"
-    :args {:signal signal}}))
+;;---------------------------------------------------------------------
+;; MESSAGE EXCHANGE
+;; --------------------------------------------------------------------
 
-(defn latest-value! [connection signal]
-  (get-in (latest! connection signal)
-          [:result :value]))
+(defn- next-message-id!
+  "Create next connection-local message id."
+  [{:keys [message-counter]}]
+  (str "m-" (swap! message-counter inc)))
 
-(defn discover! [connection]
-  (request! connection
-            {:v 1
-             :msg_id "discover"
-             :op "discover"
-             :args {}}))
+(defn- send-request!
+  "Send one Runtime request and return its msg-id."
+  [client op args request-id]
+  (let [msg-id (next-message-id! client)
+        request (cond-> {:v 1
+                         :msg_id msg-id
+                         :op op
+                         :args args}
+                  request-id
+                  (assoc :request_id request-id))]
 
-(defn instruments [discovery-response]
-  (->> (get-in discovery-response [:result :records])
-       (filter #(= "instrument" (:kind %)))
-       (mapv #(select-keys % [:id :name]))))
+    (send! client request)
 
-(defn signals [discovery-response instrument-id]
-  (->> (get-in discovery-response [:result :records])
-       (filter #(and (= "signal" (:kind %))
-                     (= instrument-id (:instrument %))))
-       (mapv #(select-keys % [:id :name :unit :signal_kind]))))
+    msg-id))
 
-(defn outputs [discovery-response instrument-id]
-  (->> (get-in discovery-response [:result :records])
-       (filter #(and (= "output" (:kind %))
-                     (= instrument-id (get-in % [:id :instrument]))))
-       (mapv #(select-keys % [:id :state]))))
+(defn- receive-response!
+  "Receive one response for expected msg-id."
+  [client msg-id]
+  (let [response (receive! client)]
 
-(comment
+    (when-not (= msg-id (:msg_id response))
+      (throw
+       (ex-info "Unexpected response"
+                {:expected msg-id
+                 :response response})))
+    response))
 
-  ;; Открыть одну сессию для интерактивной работы в REPL.
-  ;; Выполнить один раз после reload namespace.
-  (def session
-    (open-session "127.0.0.1" 8765))
+(defn- exchange!
+  "Send one query and receive one response."
+  [client op args]
+  (let [msg-id (send-request! client op args nil)]
+    (receive-response! client msg-id)))
 
-  ;; Посмотреть основные данные сессии.
-  (select-keys session [:scope :next-seq])
+;;---------------------------------------------------------------------
+;; HELLO
+;;---------------------------------------------------------------------
 
-  ;; Получить полный discovery response.
-  (def discovery
-    (discover! session))
+(defn- hello!
+  "Perform required first Runtime request."
+  [client scope]
+  (let [response
+        (exchange!
+         client
+         "hello"
+         {:scope scope})]
+    (when-not (= "result" (:type response))
+      (throw
+       (ex-info "Runtime hello failed"
+                {:response response})))
+    (:result response)))
 
-  ;; Посмотреть доступные инструменты без лишних метаданных.
-  (instruments discovery)
+;;---------------------------------------------------------------------
+;;  CLIENT CONNECTION
+;; --------------------------------------------------------------------
 
-  ;; Прочитать полное последнее измерение температуры
-  ;; виртуальной печи.
-  (latest!
-   session
-   {:instrument "1"
-    :parameter "1"})
+(defn connect!
+  "Open transport, perform hello and return ready Runtime client."
+  [{:keys [transport scope] :as config}]
+  (let [connection (open-transport! config)
 
-  ;; Получить только числовое значение температуры.
-  (latest-value!
-   session
-   {:instrument "1"
-    :parameter "1"})
+        client
+        {:transport transport
+         :connection connection
+         :message-counter (atom 0)}]
 
-  ;; Прочитать сглаженную температуру от Native moving mean.
-  (latest-value!
-   session
-   {:instrument "202"
-    :parameter "1"})
+    (try
+      (let [hello
+            (hello! client scope)]
 
-  ;; Если discovery нужно обновить.
-  (def discovery
-    (discover! session))
+        (assoc client
+               :hello hello
+               :scope (:scope hello)
+               :boot-id (:boot_id hello)
+               :next-seq
+               (atom
+                (Long/parseLong
+                 (:next_seq hello)))))
 
-  ;; Закрыть сессию после окончания работы.
-  (close! session))
+      (catch Exception error
+        (close! client)
+        (throw error)))))
+
+;;---------------------------------------------------------------------------------
+;;  QUERIES
+;; --------------------------------------------------------------------------------
+
+(defn query!
+  "Perform one read-only Runtime operation."
+  [client op args]
+  (let [response (exchange! client op args)]
+    (if (= "result" (:type response))
+      (:result response)
+      (throw
+       (ex-info "Runtime query failed"
+                {:response response})))))
+
+(defn discover!
+  "Return Runtime discovery projection."
+  [client]
+  (query! client "discover" {}))
+
+(defn latest!
+  "Return latest value for one signal."
+  [client signal]
+  (query! client
+          "latest"
+          {:signal signal}))
