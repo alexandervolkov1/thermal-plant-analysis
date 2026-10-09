@@ -34,3 +34,40 @@
 
       (finally
         (runtime/close! client)))))
+
+(deftest reference-retune-test
+  (let [client (runtime/connect! tcp-config)
+        before (atom nil)]
+
+    (try
+      (reset! before
+              (runtime/reference! client "1"))
+
+      (let [{:keys [revision]} @before]
+
+        (testing "Reference can be retuned"
+          (runtime/retune-reference!
+           client
+           "1"
+           revision
+           55.0
+           2.0)
+
+          (let [after (runtime/reference! client "1")]
+            (is (= 55.0 (:target after)))
+            (is (= 2.0 (:rate after)))
+            (is (not= revision
+                      (:revision after))))))
+
+      (finally
+        ;; Restore Reference if we managed to read its initial state.
+        (when @before
+          (let [current (runtime/reference! client "1")]
+            (runtime/retune-reference!
+             client
+             "1"
+             (:revision current)
+             (:target @before)
+             (:rate @before))))
+
+        (runtime/close! client)))))

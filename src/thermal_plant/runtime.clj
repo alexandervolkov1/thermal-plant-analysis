@@ -1,8 +1,7 @@
 (ns thermal-plant.runtime
   (:require
    [thermal-plant.transport.tcp :as tcp]
-   [thermal-plant.transport.websocket :as websocket]
-   [clojure.core :as c]))
+   [thermal-plant.transport.websocket :as websocket]))
 
 ;;---------------------------------------------------------------------
 ;; TRANSPORT DISPATCH
@@ -95,36 +94,30 @@
     (receive-response! client msg-id)))
 
 ;;---------------------------------------------------------------------
-;; HELLO
+;; CONNECTION
 ;;---------------------------------------------------------------------
 
 (defn- hello!
   "Perform required first Runtime request."
   [client scope]
-  (let [response
-        (exchange!
-         client
-         "hello"
-         {:scope scope})]
+  (let [response (exchange!
+                  client
+                  "hello"
+                  {:scope scope})]
     (when-not (= "result" (:type response))
       (throw
        (ex-info "Runtime hello failed"
                 {:response response})))
     (:result response)))
 
-;;---------------------------------------------------------------------
-;;  CLIENT CONNECTION
-;; --------------------------------------------------------------------
-
 (defn connect!
   "Open transport, perform hello and return ready Runtime client."
   [{:keys [transport scope] :as config}]
   (let [connection (open-transport! config)
 
-        client
-        {:transport transport
-         :connection connection
-         :message-counter (atom 0)}]
+        client {:transport transport
+                :connection connection
+                :message-counter (atom 0)}]
 
     (try
       (let [hello
@@ -168,3 +161,109 @@
   (query! client
           "latest"
           {:signal signal}))
+
+(defn reference!
+  "Return current state of one Reference."
+  [client reference-id]
+  (query! client
+          "reference"
+          {:reference reference-id}))
+
+(defn controller!
+  "Return current state of one controller."
+  [client controller-id]
+  (query! client
+          "controller"
+          {:controller controller-id}))
+
+(defn output!
+  "Return current state of one actuator output."
+  [client actuator]
+  (query! client
+          "output"
+          {:actuator actuator}))
+
+(defn operation-status!
+  "Return retained state of one mutation."
+  [client request-id]
+  (query! client
+          "operation_status"
+          {:request_id request-id}))
+
+;;---------------------------------------------------------------------
+;;  COMMANDS
+;; --------------------------------------------------------------------
+
+(defn- current-request-id
+  "Build id for the next Runtime mutation."
+  [{:keys [scope next-seq]}]
+  {:scope scope
+   :seq (str @next-seq)})
+
+(defn command!
+  "Perform one Runtime mutation."
+  [client op args]
+  (let [request-id (current-request-id client)
+        msg-id (send-request! client op args request-id)
+        accepted (receive-response! client msg-id)]
+
+    (when (= "error" (:type accepted))
+      (throw
+       (ex-info "Runtime command rejected"
+                {:response accepted})))
+
+    (when-not (= "accepted" (:state accepted))
+      (throw
+       (ex-info "Expected accepted operation"
+                {:response accepted})))
+
+    (swap! (:next-seq client) inc)
+
+    (let [terminal (receive-response! client msg-id)]
+      (case (:state terminal)
+        "completed"
+        (:result terminal)
+
+        "failed"
+        (throw
+         (ex-info "Runtime command failed"
+                  {:response terminal}))
+
+        (throw
+         (ex-info "Unexpected command result"
+                  {:response terminal}))))))
+
+;; Reference commands
+
+(defn retune-reference!
+  "Change target and rate of one Reference."
+  [client reference-id expected-revision target rate]
+  (command! client
+            "reference_retune"
+            {:reference reference-id
+             :expected_revision expected-revision
+             :target target
+             :rate rate}))
+
+;; Controller commands
+
+(defn start-controller!
+  "Start one Runtime controller."
+  [client controller-id]
+  (command! client
+            "controller_start"
+            {:controller controller-id}))
+
+(defn pause-controller!
+  "Pause one Runtime controller."
+  [client controller-id]
+  (command! client
+            "controller_pause"
+            {:controller controller-id}))
+
+(defn resume-controller!
+  "Resume one Runtime controller."
+  [client controller-id]
+  (command! client
+            "controller_resume"
+            {:controller controller-id}))
