@@ -234,7 +234,18 @@
          (ex-info "Unexpected command result"
                   {:response terminal}))))))
 
-;; Reference command
+;; Reference commands
+
+(defn configure-reference!
+  "Replace the policy of one Reference. Pass either
+   {:kind "fixed" :value number} or
+   {:kind "ramp" :target number :rate number}."
+  [client reference-id expected-revision config]
+  (command! client
+            "reference_configure"
+            (merge {:reference reference-id
+                    :expected_revision expected-revision}
+                   config)))
 
 (defn retune-reference!
   "Change target and rate of one Reference."
