@@ -125,5 +125,4 @@
           (catch Exception error
             (is false
                 (str "Unable to close Runtime connection: "
-                     (.getMessage error))))))))
-))
+                     (.getMessage error))))))))))
