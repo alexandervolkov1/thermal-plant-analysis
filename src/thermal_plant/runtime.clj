@@ -238,8 +238,7 @@
 
 (defn configure-reference!
   "Replace the policy of one Reference. Pass either
-   {:kind "fixed" :value number} or
-   {:kind "ramp" :target number :rate number}."
+   Use kind fixed with a value, or kind ramp with target and rate."
   [client reference-id expected-revision config]
   (command! client
             "reference_configure"
