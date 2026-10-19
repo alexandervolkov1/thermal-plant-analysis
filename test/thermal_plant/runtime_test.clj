@@ -50,7 +50,7 @@
          false)))
 
 (defn- restore-reference!
-  "Restore the original Reference policy, if it changed."
+  "Restore and verify the original Reference policy."
   [client reference-id original]
   (let [current (runtime/reference! client reference-id)]
     (when-not (same-reference-policy? original current)
@@ -72,7 +72,14 @@
          client
          reference-id
          (:revision current)
-         config)))))
+         config)))
+    (let [restored (runtime/reference! client reference-id)]
+      (when-not (same-reference-policy? original restored)
+        (throw
+         (ex-info "Reference policy was not restored"
+                  {:expected original
+                   :actual restored})))
+      restored)))
 
 (deftest reference-retune-test
   (let [client (runtime/connect! tcp-config)
