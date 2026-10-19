@@ -237,8 +237,7 @@
 ;; Reference commands
 
 (defn configure-reference!
-  "Replace the policy of one Reference. Pass either
-   Use kind fixed with a value, or kind ramp with target and rate."
+  "Replace a Reference policy using fixed/value or ramp/target/rate configuration."
   [client reference-id expected-revision config]
   (command! client
             "reference_configure"
