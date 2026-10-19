@@ -1,7 +1,8 @@
 (ns thermal-plant.runtime
   (:require
    [thermal-plant.transport.tcp :as tcp]
-   [thermal-plant.transport.websocket :as websocket]))
+   [thermal-plant.transport.websocket :as websocket]
+   [clojure.core :as c]))
 
 ;;---------------------------------------------------------------------
 ;; TRANSPORT DISPATCH
@@ -170,7 +171,7 @@
           {:reference reference-id}))
 
 (defn controller!
-  "Return current state of one controller."
+  "return current state of one controller."
   [client controller-id]
   (query! client
           "controller"
@@ -183,7 +184,7 @@
           "output"
           {:actuator actuator}))
 
-(defn operation-status!
+(defn operation-satus!
   "Return retained state of one mutation."
   [client request-id]
   (query! client
@@ -233,7 +234,7 @@
          (ex-info "Unexpected command result"
                   {:response terminal}))))))
 
-;; Reference commands
+;; Reference command
 
 (defn retune-reference!
   "Change target and rate of one Reference."
@@ -245,25 +246,4 @@
              :target target
              :rate rate}))
 
-;; Controller commands
-
-(defn start-controller!
-  "Start one Runtime controller."
-  [client controller-id]
-  (command! client
-            "controller_start"
-            {:controller controller-id}))
-
-(defn pause-controller!
-  "Pause one Runtime controller."
-  [client controller-id]
-  (command! client
-            "controller_pause"
-            {:controller controller-id}))
-
-(defn resume-controller!
-  "Resume one Runtime controller."
-  [client controller-id]
-  (command! client
-            "controller_resume"
-            {:controller controller-id}))
+;;Controller commands
